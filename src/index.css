@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import "leaflet/dist/leaflet.css";
+@import "leaflet-draw/dist/leaflet.draw.css";
+
+/* Fix Leaflet Map container height and button styles */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  min-height: 500px;
+}
+
+.leaflet-draw-toolbar a {
+  background-color: #ffffff !important;
+}
