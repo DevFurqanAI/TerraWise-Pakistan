@@ -1,4 +1,4 @@
-const BACKEND_BASE_URL = "http://localhost:8000/api/v1"; // Update to your team's FastAPI URL
+const BACKEND_BASE_URL = `${import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"}/api/v1`;
 
 export async function geocodeLocation(query) {
   const response = await fetch(

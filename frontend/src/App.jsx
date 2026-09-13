@@ -71,16 +71,14 @@ export default function App() {
         </div>
 
         {/* Right Column: Analysis Results */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col gap-5">
-          <div className="flex justify-between items-center border-b pb-3">
-            <h2 className="text-lg font-bold text-slate-800">Farm Analysis Results</h2>
-          </div>
+        <div className="bg-white p-5 sm:p-6 rounded-xl shadow-md flex flex-col gap-5">
+          <h2 className="text-base font-bold text-slate-800 tracking-tight">Analysis Results</h2>
           <ResultsDashboard results={results} isLoading={isLoading} error={error} />
         </div>
       </main>
 
-      <footer className="bg-slate-200 text-center py-3 text-xs text-slate-600 border-t border-slate-300">
-        TerraWise Platform V1 &copy; 2026 | Powered by FastAPI, Open-Meteo & Groq AI
+      <footer className="text-center py-3 text-xs text-slate-500">
+        TerraWise V1 &copy; 2026 &bull; Powered by Sentinel-2, Open-Meteo, FastAPI &amp; Groq
       </footer>
     </div>
   );

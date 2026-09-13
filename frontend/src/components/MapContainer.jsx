@@ -53,15 +53,10 @@ export default function MapContainer({ mapCenter, onPolygonSelect }) {
 
         const center = turf.centerOfMass(geojson).geometry.coordinates;
 
-        let confidence = "HIGH";
-        if (acres < 0.5) confidence = "LOW";
-        else if (acres > 500) confidence = "MEDIUM";
-
         onPolygonSelect({
           polygonGeoJSON: geojson,
           center: { lat: center[1], lng: center[0] },
           acres,
-          confidence,
         });
       };
 
@@ -88,10 +83,9 @@ export default function MapContainer({ mapCenter, onPolygonSelect }) {
 
             drawnItems.addLayer(rectangle);
 
-            // Enable immediate resize corner handles
-            if (rectangle.editing) {
-              rectangle.editing.enable();
-            }
+            // Resize/move handles are shown only via the "Edit layers" toolbar control,
+            // so the map stays clean once a shape is placed instead of leaving stray
+            // vertex handles visible.
 
             notifyParent(rectangle);
             map.off("click", handleRectangleClick);
@@ -115,7 +109,12 @@ export default function MapContainer({ mapCenter, onPolygonSelect }) {
       map.on(L.Draw.Event.EDITMOVE, (e) => notifyParent(e.layer));
       map.on(L.Draw.Event.EDITRESIZE, (e) => notifyParent(e.layer));
       map.on(L.Draw.Event.EDITED, (e) => {
-        e.layers.eachLayer((layer) => notifyParent(layer));
+        e.layers.eachLayer((layer) => {
+          notifyParent(layer);
+          if (layer.editing && layer.editing.enabled()) {
+            layer.editing.disable();
+          }
+        });
       });
 
       map.on(L.Draw.Event.DELETED, () => {
@@ -136,7 +135,7 @@ export default function MapContainer({ mapCenter, onPolygonSelect }) {
   }, [mapCenter]);
 
   return (
-    <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-200">
+    <div className="bg-white p-1.5 rounded-xl shadow-md">
       <div ref={mapRef} className="h-[520px] w-full rounded-lg z-10" />
     </div>
   );

@@ -1,9 +1,9 @@
+@import "leaflet/dist/leaflet.css";
+@import "leaflet-draw/dist/leaflet.draw.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-@import "leaflet/dist/leaflet.css";
-@import "leaflet-draw/dist/leaflet.draw.css";
 
 /* Fix Leaflet Map container height and button styles */
 .leaflet-container {
