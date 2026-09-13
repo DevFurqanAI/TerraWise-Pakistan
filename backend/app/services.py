@@ -275,12 +275,15 @@ def _fetch_open_meteo(lat: float, lng: float) -> Dict[str, Any]:
         f"timezone=auto&forecast_days=1&past_days=1"
     )
 
+    logger.info("[WEATHER-DIAG] Attempting Open-Meteo")
+
     res = None
     for attempt in range(WEATHER_MAX_ATTEMPTS):
         try:
             res = requests.get(weather_url, timeout=6)
         except requests.RequestException as exc:
             logger.warning("Open-Meteo request failed: %s", exc)
+            logger.info("[WEATHER-DIAG] Open-Meteo result: network failure")
             return {"weather_available": False, "weather_message": f"Weather service request failed: {exc}"}
 
         if res.status_code == 200 or not _is_retryable_weather_status(res.status_code):
@@ -307,6 +310,7 @@ def _fetch_open_meteo(lat: float, lng: float) -> Dict[str, Any]:
         time.sleep(wait_seconds)
 
     if res.status_code != 200:
+        logger.info("[WEATHER-DIAG] Open-Meteo result: failed with HTTP status code=%d", res.status_code)
         return {"weather_available": False, "weather_message": f"Weather service returned HTTP {res.status_code}."}
 
     try:
@@ -316,8 +320,10 @@ def _fetch_open_meteo(lat: float, lng: float) -> Dict[str, Any]:
         rains = daily.get("precipitation_sum", [])
 
         if not temps or temps[-1] is None:
+            logger.info("[WEATHER-DIAG] Open-Meteo result: failed with HTTP status code=200 (no usable data)")
             return {"weather_available": False, "weather_message": "Weather service returned no usable data for this location."}
 
+        logger.info("[WEATHER-DIAG] Open-Meteo result: success")
         return {
             "weather_available": True,
             "temperature_c": float(temps[-1]),
@@ -325,6 +331,7 @@ def _fetch_open_meteo(lat: float, lng: float) -> Dict[str, Any]:
             "recent_rainfall_mm": float(rains[-1]) if rains and rains[-1] is not None else None,
         }
     except (ValueError, KeyError, IndexError):
+        logger.info("[WEATHER-DIAG] Open-Meteo result: response parsing failure")
         return {"weather_available": False, "weather_message": "Weather service returned an unreadable response."}
 
 
@@ -354,15 +361,31 @@ def _fetch_weatherapi_fallback(lat: float, lng: float) -> Dict[str, Any]:
         )
     except requests.RequestException as exc:
         logger.warning("WeatherAPI fallback request failed: %s", exc)
+        logger.info("[WEATHER-DIAG] WeatherAPI result: network failure")
         return {"weather_available": False, "weather_message": "Weather service request failed."}
 
     if res.status_code != 200:
-        logger.warning("WeatherAPI fallback returned HTTP %d", res.status_code)
+        # Safe short error message only (e.g. WeatherAPI's {"error": {"message": "..."}}).
+        # Never log the request URL or params here, since the API key is a query param.
+        safe_error_message = None
+        try:
+            safe_error_message = res.json().get("error", {}).get("message")
+        except (ValueError, AttributeError):
+            pass
+        if safe_error_message:
+            safe_error_message = str(safe_error_message)[:200]
+        logger.warning("WeatherAPI fallback returned HTTP %d: %s", res.status_code, safe_error_message)
+        logger.info(
+            "[WEATHER-DIAG] WeatherAPI result: failed with HTTP status code=%d, message=%s",
+            res.status_code,
+            safe_error_message,
+        )
         return {"weather_available": False, "weather_message": "Weather service returned no usable data for this location."}
 
     try:
         forecast_days = res.json().get("forecast", {}).get("forecastday", [])
         if not forecast_days:
+            logger.info("[WEATHER-DIAG] WeatherAPI result: response parsing failure (no forecastday)")
             return {"weather_available": False, "weather_message": "Weather service returned no usable data for this location."}
 
         day = forecast_days[0].get("day", {})
@@ -371,8 +394,11 @@ def _fetch_weatherapi_fallback(lat: float, lng: float) -> Dict[str, Any]:
         total_precip = day.get("totalprecip_mm")
 
         if max_temp is None:
+            logger.info("[WEATHER-DIAG] WeatherAPI result: response parsing failure (missing maxtemp_c)")
             return {"weather_available": False, "weather_message": "Weather service returned no usable data for this location."}
 
+        logger.info("[WEATHER-DIAG] WeatherAPI result: success")
+        logger.info("[WEATHER-DIAG] WeatherAPI fallback succeeded")
         return {
             "weather_available": True,
             "temperature_c": float(max_temp),
@@ -380,6 +406,7 @@ def _fetch_weatherapi_fallback(lat: float, lng: float) -> Dict[str, Any]:
             "recent_rainfall_mm": float(total_precip) if total_precip is not None else None,
         }
     except (ValueError, KeyError, IndexError):
+        logger.info("[WEATHER-DIAG] WeatherAPI result: response parsing failure")
         return {"weather_available": False, "weather_message": "Weather service returned an unreadable response."}
 
 
@@ -389,10 +416,14 @@ def get_weather_data(lat: float, lng: float) -> Dict[str, Any]:
         logger.info("Weather data obtained from provider=open-meteo")
         return primary_result
 
-    if not settings.WEATHERAPI_KEY:
+    fallback_eligible = bool(settings.WEATHERAPI_KEY)
+    logger.info("[WEATHER-DIAG] WeatherAPI fallback eligible: %s", fallback_eligible)
+
+    if not fallback_eligible:
         return primary_result
 
     logger.warning("Open-Meteo unavailable, attempting WeatherAPI fallback")
+    logger.info("[WEATHER-DIAG] Attempting WeatherAPI fallback")
     fallback_result = _fetch_weatherapi_fallback(lat, lng)
     if fallback_result.get("weather_available"):
         logger.info("Weather data obtained from provider=weatherapi")

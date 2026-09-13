@@ -1,7 +1,10 @@
+import logging
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger("terrawise.config")
 
 
 def _parse_origins(raw: str):
@@ -21,3 +24,8 @@ class Settings:
 
 
 settings = Settings()
+
+# --- TEMPORARY DIAGNOSTIC LOGGING (Render WeatherAPI fallback debug) ---
+# Safe to remove once the fallback is confirmed working in production.
+# Never logs the key value itself, only whether it is configured.
+logger.info("[WEATHER-DIAG] WEATHERAPI_KEY configured: %s", bool(settings.WEATHERAPI_KEY))
