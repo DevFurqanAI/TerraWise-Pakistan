@@ -208,7 +208,7 @@ TerraWise retrieves weather data from **Open-Meteo**, a free weather data API. S
 
 It is important to note that this is forecast/model-based weather data for the general location, similar to a weather app. It is **not** a physical weather sensor installed on the selected field.
 
-If Open-Meteo does not respond successfully (for example, if it returns a "too many requests" or a temporary server error), the backend retries the request a couple of times with a short delay before giving up. If Open-Meteo still cannot be reached after that, and a **WeatherAPI.com** key is configured, TerraWise automatically falls back to WeatherAPI.com as a secondary weather provider, using the same daily maximum temperature, average humidity, and total rainfall fields so the meaning of each value stays consistent regardless of which provider answered. If neither provider can supply usable data, TerraWise marks weather data as unavailable rather than substituting a made-up value.
+If Open-Meteo does not respond successfully (for example, if it returns a "too many requests" or a temporary server error), the backend retries the request a couple of times with a short delay before giving up. If Open-Meteo still cannot be reached after that, and an **OpenWeatherMap** key is configured, TerraWise automatically falls back to OpenWeatherMap's free 5-day/3-hour forecast as a secondary weather provider. Since that endpoint has no daily aggregates, TerraWise determines the location's current local calendar date from the forecast's timezone offset and aggregates that date's 3-hour entries into the same maximum temperature, average humidity, and total rainfall fields Open-Meteo provides, so the meaning of each value stays consistent regardless of which provider answered. If neither provider can supply usable data, TerraWise marks weather data as unavailable rather than substituting a made-up value.
 
 ### Groq
 
@@ -489,7 +489,7 @@ Actual values must never be committed to the repository. Only the variable names
 | `GROQ_API_KEY` | Authenticates requests to the Groq AI service for generating explanations. |
 | `COPERNICUS_CLIENT_ID` | Client ID used to authenticate with the Copernicus Data Space Ecosystem for satellite data. |
 | `COPERNICUS_CLIENT_SECRET` | Client secret used alongside the client ID for Copernicus authentication. |
-| `WEATHERAPI_KEY` | Optional. Enables WeatherAPI.com as a secondary/fallback weather provider, used only if Open-Meteo (the primary provider) is unavailable. If left unset, TerraWise simply reports weather as unavailable when Open-Meteo fails, as before. |
+| `OPENWEATHER_API_KEY` | Optional. Enables OpenWeatherMap as a secondary/fallback weather provider, used only if Open-Meteo (the primary provider) is unavailable. If left unset, TerraWise simply reports weather as unavailable when Open-Meteo fails, as before. |
 | `ALLOWED_ORIGINS` | Comma-separated list of frontend URLs allowed to call this backend (CORS). If left empty, all origins are allowed, which is convenient for local development but should be restricted in a shared or production deployment. |
 | `PORT` | Port the backend listens on (defaults to `8000`). |
 | `HOST` | Host address the backend binds to (defaults to `0.0.0.0`). |
@@ -571,7 +571,7 @@ TerraWise is built to prefer an honest "unavailable" result over a fabricated on
 - **Invalid polygon:** if the submitted polygon is not a valid, closed GeoJSON polygon with enough points, the request is rejected with a `422` response and a clear validation message, before any external services are called.
 - **Unsupported language:** any `language` value other than `"en"` or `"ur"` is rejected with a `422` response.
 - **Missing or unavailable satellite data:** if Copernicus credentials are not configured, the satellite service cannot be reached, or no sufficiently cloud-free Sentinel-2 observation exists for the area in the last 45 days, `satellite_available` is returned as `false`, and NDVI, NDMI, the observation date, and cloud cover are all returned as `null` rather than estimated values.
-- **Weather failure:** if Open-Meteo cannot be reached or returns unusable data after its retries, and the optional WeatherAPI.com fallback (if configured) also cannot supply usable data, `weather_available` is returned as `false`, and temperature, humidity, and rainfall are returned as `null`.
+- **Weather failure:** if Open-Meteo cannot be reached or returns unusable data after its retries, and the optional OpenWeatherMap fallback (if configured) also cannot supply usable data, `weather_available` is returned as `false`, and temperature, humidity, and rainfall are returned as `null`.
 - **Missing AI availability:** if the Groq API key is not configured, the service is unreachable, or its response cannot be parsed as expected, TerraWise falls back to a fixed, pre-written explanation and set of recommendations. Importantly, this fallback text is chosen based on which data sources were actually available for that request, so it never claims that satellite or weather data was assessed when it was not.
 - **Partial analysis:** satellite and weather data are retrieved independently, so it is entirely possible for one to succeed while the other fails. TerraWise supports this combination cleanly and reflects it accurately in both the structured response and the AI explanation.
 - **Unexpected server errors:** any unhandled error during analysis returns a generic `503 Service Unavailable` response with a safe, user-facing message, without exposing internal error details or stack traces.
@@ -581,7 +581,7 @@ TerraWise is built to prefer an honest "unavailable" result over a fabricated on
 ## 18. System Limitations
 
 - An internet connection is required; TerraWise has no offline mode.
-- The system depends on external services (Copernicus/Sentinel Hub, Open-Meteo, optionally WeatherAPI.com as a weather fallback, and Groq); if the relevant ones are down, misconfigured, or rate-limited, the corresponding part of the analysis will be marked unavailable.
+- The system depends on external services (Copernicus/Sentinel Hub, Open-Meteo, optionally OpenWeatherMap as a weather fallback, and Groq); if the relevant ones are down, misconfigured, or rate-limited, the corresponding part of the analysis will be marked unavailable.
 - Satellite results depend on actual satellite pass timing and cloud cover; a persistently cloudy area may have no usable observation for an extended period.
 - NDVI and NDMI are indirect, relative indicators. They do not replace a physical, on-the-ground field inspection.
 - NDVI does not prove or measure crop health directly; it reflects vegetation activity as seen from space.

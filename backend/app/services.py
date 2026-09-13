@@ -335,78 +335,105 @@ def _fetch_open_meteo(lat: float, lng: float) -> Dict[str, Any]:
         return {"weather_available": False, "weather_message": "Weather service returned an unreadable response."}
 
 
-WEATHERAPI_FORECAST_URL = "https://api.weatherapi.com/v1/forecast.json"
-WEATHERAPI_TIMEOUT_SECONDS = 6
+OPENWEATHERMAP_FORECAST_URL = "https://api.openweathermap.org/data/2.5/forecast"
+OPENWEATHERMAP_TIMEOUT_SECONDS = 6
 
 
-def _fetch_weatherapi_fallback(lat: float, lng: float) -> Dict[str, Any]:
+def _fetch_openweathermap_fallback(lat: float, lng: float) -> Dict[str, Any]:
     """Secondary weather provider, used only when Open-Meteo is unavailable.
 
-    Uses forecast.json with days=1 (not current.json) so temperature/humidity/rainfall
-    are daily aggregates (max temperature, average humidity, total precipitation) -
-    matching the semantics of Open-Meteo's temperature_2m_max / relative_humidity_2m_mean /
-    precipitation_sum, rather than a single instantaneous reading.
+    Uses the free 5-day/3-hour forecast endpoint (not One Call 3.0). The response
+    has no daily aggregates, so today's 3-hour entries - determined from the
+    response's city timezone offset, not the server's local time - are aggregated
+    into daily-equivalent values (max temperature, average humidity, total
+    rainfall) matching the semantics of Open-Meteo's temperature_2m_max /
+    relative_humidity_2m_mean / precipitation_sum.
     """
     try:
         res = requests.get(
-            WEATHERAPI_FORECAST_URL,
+            OPENWEATHERMAP_FORECAST_URL,
             params={
-                "key": settings.WEATHERAPI_KEY,
-                "q": f"{lat},{lng}",
-                "days": 1,
-                "aqi": "no",
-                "alerts": "no",
+                "lat": lat,
+                "lon": lng,
+                "appid": settings.OPENWEATHER_API_KEY,
+                "units": "metric",
             },
-            timeout=WEATHERAPI_TIMEOUT_SECONDS,
+            timeout=OPENWEATHERMAP_TIMEOUT_SECONDS,
         )
     except requests.RequestException as exc:
-        logger.warning("WeatherAPI fallback request failed: %s", exc)
-        logger.info("[WEATHER-DIAG] WeatherAPI result: network failure")
+        logger.warning("OpenWeatherMap fallback request failed: %s", exc)
+        logger.info("[WEATHER-DIAG] OpenWeatherMap result: network failure")
         return {"weather_available": False, "weather_message": "Weather service request failed."}
 
     if res.status_code != 200:
-        # Safe short error message only (e.g. WeatherAPI's {"error": {"message": "..."}}).
+        # Safe short error message only (e.g. OpenWeatherMap's {"message": "..."}).
         # Never log the request URL or params here, since the API key is a query param.
         safe_error_message = None
         try:
-            safe_error_message = res.json().get("error", {}).get("message")
+            safe_error_message = res.json().get("message")
         except (ValueError, AttributeError):
             pass
         if safe_error_message:
             safe_error_message = str(safe_error_message)[:200]
-        logger.warning("WeatherAPI fallback returned HTTP %d: %s", res.status_code, safe_error_message)
+        logger.warning("OpenWeatherMap fallback returned HTTP %d: %s", res.status_code, safe_error_message)
         logger.info(
-            "[WEATHER-DIAG] WeatherAPI result: failed with HTTP status code=%d, message=%s",
+            "[WEATHER-DIAG] OpenWeatherMap result: failed with HTTP status code=%d, message=%s",
             res.status_code,
             safe_error_message,
         )
         return {"weather_available": False, "weather_message": "Weather service returned no usable data for this location."}
 
     try:
-        forecast_days = res.json().get("forecast", {}).get("forecastday", [])
-        if not forecast_days:
-            logger.info("[WEATHER-DIAG] WeatherAPI result: response parsing failure (no forecastday)")
+        payload = res.json()
+        entries = payload.get("list", [])
+        tz_offset_seconds = payload.get("city", {}).get("timezone", 0)
+
+        if not entries:
+            logger.info("[WEATHER-DIAG] OpenWeatherMap result: response parsing failure (no forecast entries)")
             return {"weather_available": False, "weather_message": "Weather service returned no usable data for this location."}
 
-        day = forecast_days[0].get("day", {})
-        max_temp = day.get("maxtemp_c")
-        avg_humidity = day.get("avghumidity")
-        total_precip = day.get("totalprecip_mm")
+        local_today = (datetime.now(timezone.utc) + timedelta(seconds=tz_offset_seconds)).date()
 
-        if max_temp is None:
-            logger.info("[WEATHER-DIAG] WeatherAPI result: response parsing failure (missing maxtemp_c)")
+        todays_temps = []
+        todays_humidity = []
+        todays_rain_mm = 0.0
+        matched_any = False
+
+        for entry in entries:
+            dt_unix = entry.get("dt")
+            if dt_unix is None:
+                continue
+            entry_local_date = (
+                datetime.fromtimestamp(dt_unix, tz=timezone.utc) + timedelta(seconds=tz_offset_seconds)
+            ).date()
+            if entry_local_date != local_today:
+                continue
+
+            main = entry.get("main", {})
+            temp = main.get("temp")
+            if temp is None:
+                continue
+
+            matched_any = True
+            todays_temps.append(float(temp))
+            humidity = main.get("humidity")
+            if humidity is not None:
+                todays_humidity.append(float(humidity))
+            todays_rain_mm += float((entry.get("rain") or {}).get("3h", 0) or 0)
+
+        if not matched_any:
+            logger.info("[WEATHER-DIAG] OpenWeatherMap result: no usable entries for local current date")
             return {"weather_available": False, "weather_message": "Weather service returned no usable data for this location."}
 
-        logger.info("[WEATHER-DIAG] WeatherAPI result: success")
-        logger.info("[WEATHER-DIAG] WeatherAPI fallback succeeded")
+        logger.info("[WEATHER-DIAG] OpenWeatherMap result: success")
         return {
             "weather_available": True,
-            "temperature_c": float(max_temp),
-            "humidity_percent": int(avg_humidity) if avg_humidity is not None else None,
-            "recent_rainfall_mm": float(total_precip) if total_precip is not None else None,
+            "temperature_c": round(max(todays_temps), 1),
+            "humidity_percent": round(sum(todays_humidity) / len(todays_humidity)) if todays_humidity else None,
+            "recent_rainfall_mm": round(todays_rain_mm, 1),
         }
-    except (ValueError, KeyError, IndexError):
-        logger.info("[WEATHER-DIAG] WeatherAPI result: response parsing failure")
+    except (ValueError, KeyError, IndexError, TypeError, OSError):
+        logger.info("[WEATHER-DIAG] OpenWeatherMap result: response parsing failure")
         return {"weather_available": False, "weather_message": "Weather service returned an unreadable response."}
 
 
@@ -416,20 +443,20 @@ def get_weather_data(lat: float, lng: float) -> Dict[str, Any]:
         logger.info("Weather data obtained from provider=open-meteo")
         return primary_result
 
-    fallback_eligible = bool(settings.WEATHERAPI_KEY)
-    logger.info("[WEATHER-DIAG] WeatherAPI fallback eligible: %s", fallback_eligible)
+    fallback_eligible = bool(settings.OPENWEATHER_API_KEY)
+    logger.info("[WEATHER-DIAG] OpenWeatherMap fallback eligible: %s", fallback_eligible)
 
     if not fallback_eligible:
         return primary_result
 
-    logger.warning("Open-Meteo unavailable, attempting WeatherAPI fallback")
-    logger.info("[WEATHER-DIAG] Attempting WeatherAPI fallback")
-    fallback_result = _fetch_weatherapi_fallback(lat, lng)
+    logger.warning("Open-Meteo unavailable, attempting OpenWeatherMap fallback")
+    logger.info("[WEATHER-DIAG] Attempting OpenWeatherMap fallback")
+    fallback_result = _fetch_openweathermap_fallback(lat, lng)
     if fallback_result.get("weather_available"):
-        logger.info("Weather data obtained from provider=weatherapi")
+        logger.info("Weather data obtained from provider=openweathermap")
         return fallback_result
 
-    logger.warning("WeatherAPI fallback also unavailable")
+    logger.warning("OpenWeatherMap fallback also unavailable")
     return primary_result
 
 
