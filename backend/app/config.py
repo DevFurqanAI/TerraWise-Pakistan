@@ -16,6 +16,7 @@ class Settings:
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     COPERNICUS_CLIENT_ID: str = os.getenv("COPERNICUS_CLIENT_ID", "")
     COPERNICUS_CLIENT_SECRET: str = os.getenv("COPERNICUS_CLIENT_SECRET", "")
+    WEATHERAPI_KEY: str = os.getenv("WEATHERAPI_KEY", "")
     ALLOWED_ORIGINS: list = _parse_origins(os.getenv("ALLOWED_ORIGINS", ""))
 
 

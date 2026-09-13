@@ -88,8 +88,8 @@ export default function ResultsDashboard({ results, isLoading, error }) {
 
       {!results.weather_available && (
         <div className="bg-slate-100 text-slate-600 text-xs p-3 rounded-lg">
-          <span className="font-bold text-slate-700">Weather data unavailable.</span>{" "}
-          {results.weather_message || "Live weather data could not be retrieved for this location."}
+          <span className="font-bold text-slate-700 block mb-0.5">Weather data unavailable</span>
+          Weather information could not be retrieved for this request.
         </div>
       )}
 

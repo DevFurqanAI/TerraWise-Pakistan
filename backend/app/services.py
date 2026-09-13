@@ -265,7 +265,9 @@ def _is_retryable_weather_status(status_code: int) -> bool:
     return status_code == 429 or 500 <= status_code < 600
 
 
-def get_weather_data(lat: float, lng: float) -> Dict[str, Any]:
+def _fetch_open_meteo(lat: float, lng: float) -> Dict[str, Any]:
+    """Primary weather provider. Daily max temperature, mean humidity, and total
+    precipitation for the selected coordinates, with short retry-on-429/5xx handling."""
     weather_url = (
         f"https://api.open-meteo.com/v1/forecast?"
         f"latitude={lat}&longitude={lng}&"
@@ -324,6 +326,80 @@ def get_weather_data(lat: float, lng: float) -> Dict[str, Any]:
         }
     except (ValueError, KeyError, IndexError):
         return {"weather_available": False, "weather_message": "Weather service returned an unreadable response."}
+
+
+WEATHERAPI_FORECAST_URL = "https://api.weatherapi.com/v1/forecast.json"
+WEATHERAPI_TIMEOUT_SECONDS = 6
+
+
+def _fetch_weatherapi_fallback(lat: float, lng: float) -> Dict[str, Any]:
+    """Secondary weather provider, used only when Open-Meteo is unavailable.
+
+    Uses forecast.json with days=1 (not current.json) so temperature/humidity/rainfall
+    are daily aggregates (max temperature, average humidity, total precipitation) -
+    matching the semantics of Open-Meteo's temperature_2m_max / relative_humidity_2m_mean /
+    precipitation_sum, rather than a single instantaneous reading.
+    """
+    try:
+        res = requests.get(
+            WEATHERAPI_FORECAST_URL,
+            params={
+                "key": settings.WEATHERAPI_KEY,
+                "q": f"{lat},{lng}",
+                "days": 1,
+                "aqi": "no",
+                "alerts": "no",
+            },
+            timeout=WEATHERAPI_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        logger.warning("WeatherAPI fallback request failed: %s", exc)
+        return {"weather_available": False, "weather_message": "Weather service request failed."}
+
+    if res.status_code != 200:
+        logger.warning("WeatherAPI fallback returned HTTP %d", res.status_code)
+        return {"weather_available": False, "weather_message": "Weather service returned no usable data for this location."}
+
+    try:
+        forecast_days = res.json().get("forecast", {}).get("forecastday", [])
+        if not forecast_days:
+            return {"weather_available": False, "weather_message": "Weather service returned no usable data for this location."}
+
+        day = forecast_days[0].get("day", {})
+        max_temp = day.get("maxtemp_c")
+        avg_humidity = day.get("avghumidity")
+        total_precip = day.get("totalprecip_mm")
+
+        if max_temp is None:
+            return {"weather_available": False, "weather_message": "Weather service returned no usable data for this location."}
+
+        return {
+            "weather_available": True,
+            "temperature_c": float(max_temp),
+            "humidity_percent": int(avg_humidity) if avg_humidity is not None else None,
+            "recent_rainfall_mm": float(total_precip) if total_precip is not None else None,
+        }
+    except (ValueError, KeyError, IndexError):
+        return {"weather_available": False, "weather_message": "Weather service returned an unreadable response."}
+
+
+def get_weather_data(lat: float, lng: float) -> Dict[str, Any]:
+    primary_result = _fetch_open_meteo(lat, lng)
+    if primary_result.get("weather_available"):
+        logger.info("Weather data obtained from provider=open-meteo")
+        return primary_result
+
+    if not settings.WEATHERAPI_KEY:
+        return primary_result
+
+    logger.warning("Open-Meteo unavailable, attempting WeatherAPI fallback")
+    fallback_result = _fetch_weatherapi_fallback(lat, lng)
+    if fallback_result.get("weather_available"):
+        logger.info("Weather data obtained from provider=weatherapi")
+        return fallback_result
+
+    logger.warning("WeatherAPI fallback also unavailable")
+    return primary_result
 
 
 def compute_confidence(satellite_available: bool, weather_available: bool, cloud_cover_percent: Optional[float]) -> str:
