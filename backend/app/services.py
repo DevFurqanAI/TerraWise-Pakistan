@@ -1,4 +1,6 @@
 import json
+import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -6,6 +8,8 @@ import requests
 from groq import Groq
 
 from app.config import settings
+
+logger = logging.getLogger("terrawise.services")
 
 groq_client = Groq(api_key=settings.GROQ_API_KEY) if settings.GROQ_API_KEY else None
 
@@ -253,6 +257,14 @@ def get_satellite_data(polygon_geojson: Optional[Dict[str, Any]], lat: float, ln
     return fetch_sentinel2_indices(geometry, token)
 
 
+WEATHER_MAX_ATTEMPTS = 3  # 1 initial attempt + 2 retries
+WEATHER_BACKOFF_SECONDS = [1, 2]  # wait before retry 1, then before retry 2
+
+
+def _is_retryable_weather_status(status_code: int) -> bool:
+    return status_code == 429 or 500 <= status_code < 600
+
+
 def get_weather_data(lat: float, lng: float) -> Dict[str, Any]:
     weather_url = (
         f"https://api.open-meteo.com/v1/forecast?"
@@ -260,10 +272,37 @@ def get_weather_data(lat: float, lng: float) -> Dict[str, Any]:
         f"daily=temperature_2m_max,precipitation_sum,relative_humidity_2m_mean&"
         f"timezone=auto&forecast_days=1&past_days=1"
     )
-    try:
-        res = requests.get(weather_url, timeout=6)
-    except requests.RequestException as exc:
-        return {"weather_available": False, "weather_message": f"Weather service request failed: {exc}"}
+
+    res = None
+    for attempt in range(WEATHER_MAX_ATTEMPTS):
+        try:
+            res = requests.get(weather_url, timeout=6)
+        except requests.RequestException as exc:
+            logger.warning("Open-Meteo request failed: %s", exc)
+            return {"weather_available": False, "weather_message": f"Weather service request failed: {exc}"}
+
+        if res.status_code == 200 or not _is_retryable_weather_status(res.status_code):
+            break
+
+        is_last_attempt = attempt == WEATHER_MAX_ATTEMPTS - 1
+        logger.warning(
+            "Open-Meteo returned HTTP %d (attempt %d/%d)%s",
+            res.status_code,
+            attempt + 1,
+            WEATHER_MAX_ATTEMPTS,
+            "" if is_last_attempt else ", retrying",
+        )
+        if is_last_attempt:
+            break
+
+        wait_seconds = WEATHER_BACKOFF_SECONDS[attempt]
+        retry_after = res.headers.get("Retry-After")
+        if retry_after:
+            try:
+                wait_seconds = max(wait_seconds, float(retry_after))
+            except ValueError:
+                pass
+        time.sleep(wait_seconds)
 
     if res.status_code != 200:
         return {"weather_available": False, "weather_message": f"Weather service returned HTTP {res.status_code}."}
